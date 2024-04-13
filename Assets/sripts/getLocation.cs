@@ -17,6 +17,13 @@ public class getLocation : MonoBehaviour
     private Vector3 previousPosition;
     private Vector3 actualPosition;
     private float distance;
+    private Vector2d latLong;
+    private Vector2d latLong1;
+
+    private string jsonContent;
+    private string jsonContent2;
+    private WeatherData weatherData = new WeatherData();
+    private WeatherData weatherData1 = new WeatherData();
 
     // fonction du calcul de la distance en km entre deux
     // avec les coordonnees longitude et latitude
@@ -37,11 +44,38 @@ public class getLocation : MonoBehaviour
 
     private void Start()
     {
+        previousPosition = transform.position;
         while (previousPosition == null)
         {
             //on obtient la position initiale
             previousPosition = transform.position;
         }
+        /*latLong1 = map.WorldToGeoPosition(previousPosition);
+
+        string latitude1 = latLong1.y.ToString();
+        string longitude1 = latLong1.x.ToString();
+            
+        string latitudePoint1 = latitude1.Replace(",", ".");
+        string longitudePoint1 = longitude1.Replace(",", ".");
+
+        string Url = "https://api.open-meteo.com/v1/forecast?latitude="+latitudePoint1+"&longitude="+longitudePoint1+"&current=wind_speed_10m,wind_direction_10m&hourly=wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_speed_180m,wind_direction_10m,wind_direction_80m,wind_direction_120m,wind_direction_180m&timezone=GMT&forecast_days=1";
+        string apiResponse = callApi(Url);
+
+        //deserialisation du resultat de l'api
+        if (apiResponse != null)
+        {
+            // Enregistrement des données dans le fichier data.json
+            File.WriteAllText("data.json", apiResponse);
+            Debug.Log("Les données ont été enregistrées dans data.json");
+
+            // Extraction des données dans une variable
+            
+            
+        }
+        else
+        {
+            Debug.LogError("Impossible de récupérer les données de l'API.");
+        }*/
     }
 
     private void Update()
@@ -54,44 +88,68 @@ public class getLocation : MonoBehaviour
         }
         else
         {
-            // position actuelle du GameObject
-            Vector3 actualPosition = transform.position;
+            actualPosition = transform.position;
+            while (latLong == null)
+            {
+                // position actuelle du GameObject
+                Vector3 actualPosition = transform.position;
+            }
 
             // Conversion de la position en coordonnees de latitude et longitude
-            Vector2d latLong = map.WorldToGeoPosition(actualPosition);
+            latLong = map.WorldToGeoPosition(actualPosition);
 
             // affichage des coordonnees 
             Debug.Log("Position du GameObject: " + latLong.x + ", " + latLong.y);
 
-            if(distanceHaversine(previousPosition, actualPosition) >= 10)
+
+            jsonContent = File.ReadAllText("data.json");
+            WeatherData weatherData = JsonConvert.DeserializeObject<WeatherData>(jsonContent);
+            //calcul de la direction en fonction de l'angle fournit par l'Api
+            Vector3 dir = new Vector3(Mathf.Cos(Mathf.Deg2Rad * weatherData.current.wind_direction_10m), 0f, Mathf.Sin(Mathf.Deg2Rad * weatherData.current.wind_direction_10m));
+            Debug.Log("Nouvelle direction 1: " + weatherData.current.wind_direction_10m);
+            transform.Translate(dir * 2 * Time.deltaTime, Space.Self);
+            /*if (distanceHaversine(previousPosition, transform.position) > 1000)
             {
-                previousPosition = actualPosition;
-                string latitude = latLong.y.ToString();
-                string longitude = latLong.x.ToString();
-            
-                string latitudePoint = latitude.Replace(",", ".");
-                string longitudePoint = longitude.Replace(",", ".");
+                actualPosition = transform.position;
+                Vector2d latLong2 = map.WorldToGeoPosition(actualPosition);
 
-                string Url = "https://api.open-meteo.com/v1/forecast?latitude="+latitudePoint+"&longitude="+longitudePoint+"&current=wind_speed_10m,wind_direction_10m&hourly=wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_speed_180m,wind_direction_10m,wind_direction_80m,wind_direction_120m,wind_direction_180m&timezone=GMT&forecast_days=1";
+                string latitude2 = latLong2.y.ToString();
+                string longitude2 = latLong2.x.ToString();
+
+                string latitudePoint2 = latitude2.Replace(",", ".");
+                string longitudePoint2 = longitude2.Replace(",", ".");
+
+                string Url = "https://api.open-meteo.com/v1/forecast?latitude="+latitudePoint2+"&longitude="+longitudePoint2+"&current=wind_speed_10m,wind_direction_10m&hourly=wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_speed_180m,wind_direction_10m,wind_direction_80m,wind_direction_120m,wind_direction_180m&timezone=GMT&forecast_days=1";
                 string apiResponse = callApi(Url);
-
-                //deserialisation du resultat de l'api
                 if (apiResponse != null)
                 {
                     // Enregistrement des données dans le fichier data.json
-                    File.WriteAllText("data.json", apiResponse);
-                    Debug.Log("Les données ont été enregistrées dans data.json");
+                    File.WriteAllText("data1.json", apiResponse);
+                    Debug.Log("Les données ont été enregistrées dans data1.json");
 
                     // Extraction des données dans une variable
-                    dynamic extractedData = JsonConvert.DeserializeObject(apiResponse);
-                    var data = extractedData.results;
-                    Debug.Log("Données extraites avec succès :"+ data);
+                    jsonContent = File.ReadAllText("data1.json");
+                    Debug.Log("Données extraites avec succès :"+ jsonContent);
                 }
                 else
                 {
                     Debug.LogError("Impossible de récupérer les données de l'API.");
-                }
+                }       
+            }*/ 
+            if (distanceHaversine(previousPosition, transform.position) > 100)
+            {
+                jsonContent2 = File.ReadAllText("data1.json");
+                WeatherData weatherData1 = JsonConvert.DeserializeObject<WeatherData>(jsonContent2);
+                //calcul de la direction en fonction de l'angle fournit par l'Api
+                Vector3 dir1 = new Vector3(Mathf.Cos(Mathf.Deg2Rad * weatherData1.current.wind_direction_10m), 0f, Mathf.Sin(Mathf.Deg2Rad * weatherData1.current.wind_direction_10m));
+                Debug.Log("Nouvelle direction 2: " + weatherData1.current.wind_direction_10m);
+                transform.Translate(dir1 * 2 * Time.deltaTime, Space.Self);  
             }
+            else
+            {
+                Debug.Log("NONE");
+            }
+            
         }
     }
 
@@ -119,7 +177,7 @@ public class WeatherData
     public int utc_offset_seconds;
     public string timezone;
     public string timezone_abbreviation;
-    public int elevation;
+    public float elevation;
     public Units current_units;
     public Current current;
     public Units hourly_units;
