@@ -1,219 +1,245 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using Newtonsoft.Json;
-using System;
-using System.IO;
-using System.Net;
+using UnityEngine.Networking;
 using Mapbox.Unity.Map;
-using Mapbox.Utils;
+using Mapbox.Unity.Location;
+using System.Globalization;
 
-public class userMoove : MonoBehaviour
+public class BalloonController : MonoBehaviour
 {
     public AbstractMap map;
-    private Vector3 previousPosition;
-    private Vector2d previousPositionLatLong;
-    private string jsonContent;
-    private Vector3 direction;
-    private Vector3 newDirection;
+    public float altitude = 0f;
+    public float altitudeStep = 10f;
+    public float altitudeChangeSpeed = 2f;
+    private Vector3 targetWindDirection;
+    private float targetWindSpeed;
+    private Vector3 currentWindDirection;
+    private float currentWindSpeed;
+    private string weatherApiKey = "YOUR_API_KEY";
+    private LocationProviderFactory _locationProviderFactory;
+    private ILocationProvider _locationProvider;
 
-    private WeatherData weatherData;
+    private List<float> altitudes = new List<float> { 10f, 80f, 120f, 180f };
+    private List<float> windSpeeds = new List<float>();
+    private List<int> windDirections = new List<int>();
 
-    private float heightAboveMap = 10f; // Hauteur initiale au-dessus de la carte
+    // Camera variables
+    public Transform cameraTransform;
+    public Vector3 cameraOffset;
+    public float cameraSmoothSpeed = 0.125f;
 
-    private void Start()
+    // Balloon size
+    private float objectHeight;
+
+    // Target altitude
+    private float targetAltitude;
+
+    // Start and end points
+    private Vector3 startPoint;
+    private Vector3 endPoint;
+    private bool startPointSelected = false;
+    private bool endPointSelected = false;
+
+    public GameObject startPointMarker;
+    public GameObject endPointMarker;
+
+    void Start()
     {
-        bool response = true;
+        //initialisation du centre de la carte Ã  Brussels
+        map.Initialize(new Mapbox.Utils.Vector2d(50.8503, 4.3517), 8);
 
-        while(response)
+        _locationProviderFactory = LocationProviderFactory.Instance;
+        _locationProvider = _locationProviderFactory.DefaultLocationProvider;
+
+        objectHeight = GetComponent<Renderer>().bounds.size.y;
+
+        StartCoroutine(GetWindData());
+
+        currentWindDirection = Vector3.forward;
+        currentWindSpeed = 0f;
+
+        targetAltitude = altitude;
+    }
+
+    void Update()
+    {
+        // Check for mouse click
+        if (Input.GetMouseButtonDown(0))
         {
-            previousPosition = transform.position;
-            previousPositionLatLong = map.WorldToGeoPosition(previousPosition);
-            Debug.Log(previousPositionLatLong);
+            Vector3 mousePosition = Input.mousePosition;
+            Ray ray = Camera.main.ScreenPointToRay(mousePosition);
+            RaycastHit hit;
 
-            //ici je remplace le point se trouvant dans les coordonnées par une virgule
-            string latitudeCurrentPoint = previousPositionLatLong.y.ToString();
-            string longitudeCurrentPoint = previousPositionLatLong.x.ToString();
-
-            string latitudePoint = latitudeCurrentPoint.Replace(",", ".");
-            string longitudePoint = longitudeCurrentPoint.Replace(",", ".");
-
-            Debug.Log("Appel de l'api");
-
-            // Appeler l'API pour obtenir les données météorologiques
-            string apiUrl = "https://api.open-meteo.com/v1/forecast?latitude=" + latitudePoint +
-                            "&longitude=" + longitudePoint +
-                            "&current=wind_speed_10m,wind_direction_10m" +
-                            "&hourly=wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_speed_180m," +
-                            "wind_direction_10m,wind_direction_80m,wind_direction_120m,wind_direction_180m" +
-                            "&timezone=GMT&forecast_days=1";
-
-            string apiResponse = callApi(apiUrl);
-
-            if (!string.IsNullOrEmpty(apiResponse))
+            if (Physics.Raycast(ray, out hit))
             {
-                // Traiter les données météorologiques
-                weatherData = JsonConvert.DeserializeObject<WeatherData>(apiResponse);
+                Vector3 point = hit.point;
 
-                // Calculer la nouvelle direction en fonction des données météorologiques
-                direction = CalculateDirectionFromWeather(weatherData);
-                Debug.Log("Start direction: " + direction);
-                response = false;
+                if (!startPointSelected)
+                {
+                    startPoint = point;
+                    startPointSelected = true;
+                    Instantiate(startPointMarker, point, Quaternion.identity);
+                }
+                else if (!endPointSelected)
+                {
+                    endPoint = point;
+                    endPointSelected = true;
+                    Instantiate(endPointMarker, point, Quaternion.identity);
+                }
             }
-            else
-            {
-                response = true;
-                Debug.LogError("Impossible de récupérer les données météorologiques de l'API.");
-            }
+        }
+
+        if (startPointSelected && endPointSelected)
+        {
+            // Move the balloon from startPoint to endPoint
+            MoveObjectTowardsEndPoint();
+        }
+
+        // Controls for ascending and descending
+        if (Input.GetKeyDown(KeyCode.UpArrow))
+        {
+            targetAltitude += altitudeStep;
+            StartCoroutine(GetWindData());
+        }
+        else if (Input.GetKeyDown(KeyCode.DownArrow))
+        {
+            targetAltitude = Mathf.Max(targetAltitude - altitudeStep, 0);
+            StartCoroutine(GetWindData());
+        }
+
+        altitude = Mathf.Lerp(altitude, targetAltitude, Time.deltaTime * altitudeChangeSpeed);
+
+        SmoothWindTransition();
+
+        Vector3 displacement = currentWindDirection * currentWindSpeed * Time.deltaTime;
+
+        Vector3 newPosition = transform.position + displacement;
+
+        transform.Translate(displacement, Space.World);
+
+        UpdateAltitudePosition();
+
+        FollowObjectWithCamera();
+    }
+
+    void MoveObjectTowardsEndPoint()
+    {
+        Vector3 direction = (endPoint - transform.position).normalized;
+        float speed = currentWindSpeed * Time.deltaTime;
+        transform.position = Vector3.MoveTowards(transform.position, endPoint, speed);
+
+        if (Vector3.Distance(transform.position, endPoint) < 0.1f)
+        {
+            Debug.Log("Object has reached the destination.");
         }
     }
 
-    private void Update()
+    void UpdateAltitudePosition()
     {
-        Vector3 currentPosition = transform.position;
-        Vector2d currentPositionLatLong = map.WorldToGeoPosition(currentPosition);
-        Debug.Log(currentPositionLatLong);
+        Vector3 position = transform.position;
+        position.y = Mathf.Max(altitude + objectHeight / 2, objectHeight / 2);
+        transform.position = position;
+    }
 
-        // Calculer la distance entre les positions actuelle et précédente en km
-        double distanceTravelled = distanceHaversine(previousPosition, currentPosition);
-        Debug.Log("Distance égale :" + distanceTravelled);
+    IEnumerator GetWindData()
+    {
+        var location = _locationProvider.CurrentLocation.LatitudeLongitude;
 
+        //permet de remplacer la virgule par un point dans les coordonnÃ©es retournÃ©es
+        string latitude = location.x.ToString(CultureInfo.InvariantCulture);
+        string longitude = location.y.ToString(CultureInfo.InvariantCulture);
 
-        // Vérifier si la distance parcourue dépasse 8 km
-        if (distanceTravelled >= (double)0.5)
+        if (location.x < -90 || location.x > 90 || location.y < -180 || location.y > 180)
         {
-            //ici je remplace le point se trouvant dans les coordonnées par une virgule
-            string latitudeCurrentPoint = currentPositionLatLong.y.ToString();
-            string longitudeCurrentPoint = currentPositionLatLong.x.ToString();
+            Debug.LogError("Invalid latitude or longitude values.");
+            yield break;
+        }
 
-            string latitudePoint = latitudeCurrentPoint.Replace(",", ".");
-            string longitudePoint = longitudeCurrentPoint.Replace(",", ".");
+        string url = $"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&hourly=wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_speed_180m,wind_direction_10m,wind_direction_80m,wind_direction_120m,wind_direction_180m&appid={weatherApiKey}&units=metric";
 
-            Debug.Log("Appel de l'api");
+        UnityWebRequest request = UnityWebRequest.Get(url);
+        yield return request.SendWebRequest();
 
-            // Appeler l'API pour obtenir les données météorologiques
-            string apiUrl = "https://api.open-meteo.com/v1/forecast?latitude=" + latitudePoint +
-                            "&longitude=" + longitudePoint +
-                            "&current=wind_speed_10m,wind_direction_10m" +
-                            "&hourly=wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_speed_180m," +
-                            "wind_direction_10m,wind_direction_80m,wind_direction_120m,wind_direction_180m" +
-                            "&timezone=GMT&forecast_days=1";
-
-            string apiResponse = callApi(apiUrl);
-
-            if (!string.IsNullOrEmpty(apiResponse))
-            {
-                // Traiter les données météorologiques
-                weatherData = JsonConvert.DeserializeObject<WeatherData>(apiResponse);
-
-                // Calculer la nouvelle direction en fonction des données météorologiques
-                direction = CalculateDirectionFromWeather(weatherData);
-
-                // Mettre à jour la position et les coordonnées lat/long précédentes
-                previousPosition = currentPosition;
-                previousPositionLatLong = currentPositionLatLong;
-            }
-            else
-            {
-                Debug.LogError("Impossible de récupérer les données météorologiques de l'API.");
-            }
-
-            // Appliquer la nouvelle direction au mouvement du joueur
-            transform.Translate(direction * Time.deltaTime * 2f, Space.Self);
-
-            currentPositionLatLong = new Vector2d(0, 0);
+        if (request.result == UnityWebRequest.Result.ConnectionError || request.result == UnityWebRequest.Result.ProtocolError)
+        {
+            Debug.LogError($"Error: {request.error}");
         }
         else
         {
-            transform.Translate(direction * Time.deltaTime * 2f, Space.Self);
+            string json = request.downloadHandler.text;
 
-            // Déplacement horizontal
-            float horizontalInput = Input.GetAxis("Horizontal");
-            float verticalInput = Input.GetAxis("Vertical");
+            WeatherData weatherData = JsonUtility.FromJson<WeatherData>(json);
+            UpdateWindData(weatherData);
 
-            Vector3 moveDirection = new Vector3(horizontalInput, 0f, verticalInput).normalized;
-            Vector3 newPosition = transform.position + moveDirection * Time.deltaTime * 2f;
-
-            if (Input.GetKey(KeyCode.UpArrow))
-            {
-                heightAboveMap += Time.deltaTime * 2f; // Augmente la hauteur
-            }
-            else if (Input.GetKey(KeyCode.DownArrow))
-            {
-                heightAboveMap -= Time.deltaTime * 2f; // Diminue la hauteur
-                heightAboveMap = Mathf.Max(heightAboveMap, 10f); // Limite la hauteur minimale
-            }
-
-            newPosition.y = heightAboveMap;
-
-            // Déplace le GameObject
-            transform.position = newPosition;
-
-            // Met à jour la position et les coordonnées lat/long précédentes
-            //previousPosition = newPosition;
-            //previousPositionLatLong = map.WorldToGeoPosition(newPosition);
+            Debug.Log($"Wind Speed: {targetWindSpeed}, Wind Direction: {targetWindDirection}");
         }
     }
 
-
-    private double distanceHaversine(Vector3 point1, Vector3 point2)
+    void UpdateWindData(WeatherData weatherData)
     {
-        Vector2d point1_2d = map.WorldToGeoPosition(point1);
-        Vector2d point2_2d = map.WorldToGeoPosition(point2);
+        windSpeeds.Clear();
+        windDirections.Clear();
 
-        double dLat = Mathf.Deg2Rad * (point2_2d.y - point1_2d.y);
-        double dLon = Mathf.Deg2Rad * (point2_2d.x - point1_2d.x);
+        windSpeeds.Add(weatherData.current.wind_speed_10m);
+        windDirections.Add(weatherData.current.wind_direction_10m);
+        windSpeeds.Add(weatherData.hourly.wind_speed_80m[0]);
+        windDirections.Add(weatherData.hourly.wind_direction_80m[0]);
+        windSpeeds.Add(weatherData.hourly.wind_speed_120m[0]);
+        windDirections.Add(weatherData.hourly.wind_direction_120m[0]);
+        windSpeeds.Add(weatherData.hourly.wind_speed_180m[0]);
+        windDirections.Add(weatherData.hourly.wind_direction_180m[0]);
 
-        double a = Mathf.Sin((float)(dLon / 2)) * Mathf.Sin((float)(dLon / 2)) +
-                   Mathf.Cos((float)Mathf.Deg2Rad * (float)point1_2d.y) * Mathf.Cos((float)Mathf.Deg2Rad * (float)point2_2d.y) *
-                   Mathf.Sin((float)(dLat / 2)) * Mathf.Sin((float)(dLat / 2));
-
-        double c = 2 * Mathf.Atan2(Mathf.Sqrt((float)a), Mathf.Sqrt((float)(1 - a)));
-
-        double distance = 6371 * c; // Rayon de la terre en km
-        return distance;
+        InterpolateWindData(targetAltitude);
     }
 
-    private string callApi(string URL)
+    void InterpolateWindData(float currentAltitude)
     {
-        try
+        if (currentAltitude <= altitudes[0])
         {
-            WebClient client = new WebClient();
-            return client.DownloadString(URL);
+            targetWindSpeed = windSpeeds[0];
+            targetWindDirection = Quaternion.Euler(0, -windDirections[0], 0) * Vector3.forward;
         }
-        catch (WebException e)
+        else if (currentAltitude >= altitudes[altitudes.Count - 1])
         {
-            Debug.Log("Erreur appel Api:" + e.Message);
-            return null;
+            targetWindSpeed = windSpeeds[windSpeeds.Count - 1];
+            targetWindDirection = Quaternion.Euler(0, -windDirections[windDirections.Count - 1], 0) * Vector3.forward;
+        }
+        else
+        {
+            for (int i = 0; i < altitudes.Count - 1; i++)
+            {
+                if (currentAltitude > altitudes[i] && currentAltitude <= altitudes[i + 1])
+                {
+                    float t = (currentAltitude - altitudes[i]) / (altitudes[i + 1] - altitudes[i]);
+                    targetWindSpeed = Mathf.Lerp(windSpeeds[i], windSpeeds[i + 1], t);
+                    float windDirectionDegrees = Mathf.LerpAngle(windDirections[i], windDirections[i + 1], t);
+                    targetWindDirection = Quaternion.Euler(0, -windDirectionDegrees, 0) * Vector3.forward;
+                    break;
+                }
+            }
         }
     }
 
-    private Vector3 CalculateDirectionFromWeather(WeatherData weatherData)
+    void SmoothWindTransition()
     {
-        // Calculer la direction en fonction des données météorologiques
-        // À implémenter selon vos besoins spécifiques
-        // Cet exemple suppose que la direction du vent est utilisée comme nouvelle direction
-        float windDirectionDegrees = weatherData.current.wind_direction_10m;
-        Vector3 direction = new Vector3(Mathf.Cos(Mathf.Deg2Rad * windDirectionDegrees), 0f, Mathf.Sin(Mathf.Deg2Rad * windDirectionDegrees));
-        return direction;
+        float smoothTime = 0.5f;
+        currentWindDirection = Vector3.Slerp(currentWindDirection, targetWindDirection, Time.deltaTime / smoothTime);
+        currentWindSpeed = Mathf.Lerp(currentWindSpeed, targetWindSpeed, Time.deltaTime / smoothTime);
+    }
+
+    void FollowObjectWithCamera()
+    {
+        Vector3 desiredPosition = transform.position + cameraOffset;
+        Vector3 smoothedPosition = Vector3.Lerp(cameraTransform.position, desiredPosition, cameraSmoothSpeed);
+        cameraTransform.position = smoothedPosition;
+
+        // Make the camera look in the direction the balloon is facing
+        cameraTransform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up);
     }
 }
 
-public class WeatherData
-{
-    public double latitude;
-    public double longitude;
-    public float generationtime_ms;
-    public int utc_offset_seconds;
-    public string timezone;
-    public string timezone_abbreviation;
-    public float elevation;
-    public Units current_units;
-    public Current current;
-    public Units hourly_units;
-    public Hourly hourly;
-}
-
+[System.Serializable]
 public class Units
 {
     public string time;
@@ -228,6 +254,7 @@ public class Units
     public string wind_direction_180m;
 }
 
+[System.Serializable]
 public class Current
 {
     public string time;
@@ -236,6 +263,7 @@ public class Current
     public int wind_direction_10m;
 }
 
+[System.Serializable]
 public class Hourly
 {
     public List<string> time;
@@ -247,4 +275,20 @@ public class Hourly
     public List<int> wind_direction_80m;
     public List<int> wind_direction_120m;
     public List<int> wind_direction_180m;
+}
+
+[System.Serializable]
+public class WeatherData
+{
+    public double latitude;
+    public double longitude;
+    public float generationtime_ms;
+    public int utc_offset_seconds;
+    public string timezone;
+    public string timezone_abbreviation;
+    public float elevation;
+    public Units current_units;
+    public Current current;
+    public Units hourly_units;
+    public Hourly hourly;
 }
