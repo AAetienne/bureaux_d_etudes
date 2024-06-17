@@ -29,13 +29,13 @@ public class BalloonController : MonoBehaviour
     public Vector3 cameraOffset;
     public float cameraSmoothSpeed = 0.125f;
 
-    // Balloon size
+    // dimension de l'objet
     private float objectHeight;
 
-    // Target altitude
+    // altitude cible
     private float targetAltitude;
 
-    // Start and end points
+    // Start et end points
     private Vector3 startPoint;
     private Vector3 endPoint;
     private bool startPointSelected = false;
@@ -46,25 +46,31 @@ public class BalloonController : MonoBehaviour
 
     void Start()
     {
-        //initialisation du centre de la carte à Brussels
+        // initialisation du centre de la carte à Brussels
         map.Initialize(new Mapbox.Utils.Vector2d(50.8503, 4.3517), 8);
 
+        // on cree des instances des fournisseurs de localisation
         _locationProviderFactory = LocationProviderFactory.Instance;
         _locationProvider = _locationProviderFactory.DefaultLocationProvider;
 
+        // on recupère la hauteur de l'objet auquel on associe le script
         objectHeight = GetComponent<Renderer>().bounds.size.y;
 
+        // appel de la coroutine 
         StartCoroutine(GetWindData());
 
+        // on initialise
         currentWindDirection = Vector3.forward;
         currentWindSpeed = 0f;
 
+        // initialisation de l'altitude cible
         targetAltitude = altitude;
     }
 
     void Update()
     {
-        // Check for mouse click
+        // on met en place le choix des points de départ et d'arrivée
+        // avec une sélection par clic de souris. MAIS ABANDON !!!
         if (Input.GetMouseButtonDown(0))
         {
             Vector3 mousePosition = Input.mousePosition;
@@ -96,33 +102,47 @@ public class BalloonController : MonoBehaviour
             MoveObjectTowardsEndPoint();
         }
 
-        // Controls for ascending and descending
+        // contrôle du mouvement verticale de l'objet
         if (Input.GetKeyDown(KeyCode.UpArrow))
-        {
+        {   
+            // l'altitude monte par pas de 10f
             targetAltitude += altitudeStep;
+            // appel de la coroutine d'acquisition des données météorologiques
             StartCoroutine(GetWindData());
         }
         else if (Input.GetKeyDown(KeyCode.DownArrow))
         {
+            // l'altitude monte par pas de 10f
             targetAltitude = Mathf.Max(targetAltitude - altitudeStep, 0);
+            // appel de la coroutine d'acquisition des données météorologiques
             StartCoroutine(GetWindData());
         }
 
+        // interpolation linéaire entre deux valeurs d'altitude
+        // on ajuste progréssivement l'altitude pour atteindre l'altitude cible
         altitude = Mathf.Lerp(altitude, targetAltitude, Time.deltaTime * altitudeChangeSpeed);
 
+        // appel de la focntion qui permet d'ajuster progressivement la vitesse
+        // et la direction de l'objet
         SmoothWindTransition();
 
+        // déplacement de l'objet 
         Vector3 displacement = currentWindDirection * currentWindSpeed * Time.deltaTime;
 
         Vector3 newPosition = transform.position + displacement;
 
         transform.Translate(displacement, Space.World);
 
+        // appel de la fonction qui fait la mise à jour de l'altidue
+        // et fais aussi en sorte de ne pas traverser la carte
         UpdateAltitudePosition();
 
+        // appel de la fonction de suivi de l'objet par la caméra
         FollowObjectWithCamera();
     }
 
+    // fonction qui permet de se déplacer vers un point cible
+    // NE MARCHE PAS !!!
     void MoveObjectTowardsEndPoint()
     {
         Vector3 direction = (endPoint - transform.position).normalized;
@@ -135,6 +155,7 @@ public class BalloonController : MonoBehaviour
         }
     }
 
+    // fonction qui ajuste la position en s'assurant que l'objet ne descende pas en dessous de la moitié de son hauteur
     void UpdateAltitudePosition()
     {
         Vector3 position = transform.position;
@@ -142,6 +163,7 @@ public class BalloonController : MonoBehaviour
         transform.position = position;
     }
 
+    // coroutine d'acquiqition des données météorologiques
     IEnumerator GetWindData()
     {
         var location = _locationProvider.CurrentLocation.LatitudeLongitude;
@@ -150,12 +172,14 @@ public class BalloonController : MonoBehaviour
         string latitude = location.x.ToString(CultureInfo.InvariantCulture);
         string longitude = location.y.ToString(CultureInfo.InvariantCulture);
 
+        // contrôle et vérification des valeurs de localisation
         if (location.x < -90 || location.x > 90 || location.y < -180 || location.y > 180)
         {
             Debug.LogError("Invalid latitude or longitude values.");
-            yield break;
+            yield break; // yield permet le contrôle du flux d'exécution
         }
 
+        // requête de l'API
         string url = $"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&hourly=wind_speed_10m,wind_speed_80m,wind_speed_120m,wind_speed_180m,wind_direction_10m,wind_direction_80m,wind_direction_120m,wind_direction_180m&appid={weatherApiKey}&units=metric";
 
         UnityWebRequest request = UnityWebRequest.Get(url);
@@ -166,7 +190,9 @@ public class BalloonController : MonoBehaviour
             Debug.LogError($"Error: {request.error}");
         }
         else
-        {
+        {   
+            // désérialisation du fichier json, accès aux valeurs de vitesse et de direction
+            // avec une instance de la classe weatherData
             string json = request.downloadHandler.text;
 
             WeatherData weatherData = JsonUtility.FromJson<WeatherData>(json);
@@ -176,6 +202,8 @@ public class BalloonController : MonoBehaviour
         }
     }
 
+    // fonction de remplissage des listes de direction et de vitesse
+    // à différentes altitudes et horaires
     void UpdateWindData(WeatherData weatherData)
     {
         windSpeeds.Clear();
